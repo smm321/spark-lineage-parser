@@ -1,0 +1,10 @@
+server:
+  port: 9142
+
+logging:
+  config: classpath:logback/logback-spring.xml
+  file:
+    path: ./log
+  pattern:
+    console: "%red(%d{yyyy-MM-dd HH:mm:ss}) %yellow([%X{traceId}]) %blue([lineNo: %line]) %green([%thread]) %highlight(%-5level) %boldMagenta(%logger) - %cyan(%msg%n)"
+
