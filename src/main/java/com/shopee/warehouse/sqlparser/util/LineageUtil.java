@@ -196,6 +196,7 @@ public class LineageUtil {
             return o;
         }).collect(Collectors.toList()));
         score.setLimitRelation(antlr.getLimitRelation());
+        score.setLimitations(spark.getLimitations());
         return score;
     }
 }

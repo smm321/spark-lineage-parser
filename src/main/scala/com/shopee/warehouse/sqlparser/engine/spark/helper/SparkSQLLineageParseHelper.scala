@@ -21,12 +21,11 @@ import com.shopee.warehouse.sqlparser.Lineage
 import org.apache.hadoop.fs.Path
 
 import scala.collection.immutable.ListMap
-import scala.util.Try
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.{NamedRelation, PersistedView, ViewType}
 import org.apache.spark.sql.catalyst.catalog.{CatalogStorageFormat, CatalogTable, HiveTableRelation}
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, AttributeSet, BinaryComparison, BinaryExpression, BinaryOperator, Cast, CommutativeExpression, EqualTo, Exists, Expression, GreaterThan, In, InSubquery, IsNull, Like, ListQuery, Literal, NamedExpression, Not, OuterReference, Predicate, RLike, ScalarSubquery, StringRegexExpression, TernaryExpression, UnaryExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, AttributeSet, BinaryComparison, BinaryExpression, BinaryOperator, Cast, EqualTo, Exists, Explode, Expression, GreaterThan, In, InSubquery, IsNull, Like, ListQuery, Literal, NamedExpression, Not, OuterReference, Predicate, RLike, ScalarSubquery, StringRegexExpression, TernaryExpression, UnaryExpression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Count}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.connector.catalog.{CatalogPlugin, Identifier, TableCatalog}
@@ -53,6 +52,7 @@ trait LineageParser {
   var listenerLineageOutputTable:String = ""
   val listenerLineageLimitation = new ListBuffer[(String, String)]
   val conditionCache = new HashSet[String]()
+  val joinAttribute: AttributeMap[AttributeSet] = ListMap[Attribute, AttributeSet]()
   var count = 0
 
   def parse(plan: LogicalPlan) = {
@@ -466,6 +466,18 @@ trait LineageParser {
                 attr.exprId,
                 AttributeSet(attr))))
         }
+        p.generator match {
+          case o: Explode => {
+            o.references.foreach {
+              case x:AttributeReference => {
+                AttributeLineage.findSourceAttributes(x, p.child).foreach(y => {
+                  listenerLineageLimitation.append((y, o.toString()))
+                })
+              }
+            }
+          }
+        }
+
         p.children.map(extractColumnsLineage(_, nextColumnsLineage)).reduce(mergeColumnsLineage)
 
       case p: Window =>
@@ -483,13 +495,32 @@ trait LineageParser {
                 windowColumnsLineage.getOrElse(attr, AttributeSet(attr))))
           }
         }
+
+        val wind = p.asInstanceOf[Window]
+        wind.partitionSpec.filter(o => o.isInstanceOf[AttributeReference]).foreach(x => AttributeLineage.findSourceAttributes(x.asInstanceOf[AttributeReference], p.child).foreach(y => {
+          listenerLineageLimitation.append((y, p.windowExpressions.toString()))
+        }))
+        wind.orderSpec.foreach(o => {
+          if (o.child.isInstanceOf[AttributeReference]) {
+            AttributeLineage.findSourceAttributes(o.child.asInstanceOf[AttributeReference], p.child).foreach(y => listenerLineageLimitation.append((y, o.toString())))
+          }
+        })
         p.children.map(extractColumnsLineage(_, nextColumnsLineage)).reduce(mergeColumnsLineage)
 
       case p: Join =>
-        val join:Option[Expression] = p.asInstanceOf[Join].condition
-        extractCondition(join.get, extractColumnsLineage(p.left, ListMap[Attribute, AttributeSet]()).values.flatten ++ extractColumnsLineage(p.right, ListMap[Attribute, AttributeSet]()).values.flatten, p)
-        p.children.map(extractColumnsLineage(_, parentColumnsLineage))
-          .reduce(mergeColumnsLineage)
+        try {
+          val jt = p.joinType.toString
+          val expr = p.condition.head.toString
+          p.condition.map(_.references).getOrElse(AttributeSet.empty).foreach {
+            x => AttributeLineage.findSourceAttributes(x.asInstanceOf[AttributeReference], p).foreach(y => {
+              listenerLineageLimitation.append((y, jt + " " + expr))
+            })
+          }
+        } catch {
+          case e:Exception =>
+        }
+
+        p.children.map(extractColumnsLineage(_, parentColumnsLineage)).reduce(mergeColumnsLineage)
 
       case p: Union =>
         val childrenColumnsLineage =
@@ -567,8 +598,15 @@ trait LineageParser {
         }
 
       case p:Filter => {
-        extractCondition(p.condition, extractColumnsLineage(p.child, ListMap[Attribute, AttributeSet]()).values.flatten, p)
-        extractColumnsLineage(p.child, parentColumnsLineage)
+        p.condition.map(_.references).foreach {
+          x => {
+            x.foreach(y => {
+              AttributeLineage.findSourceAttributes(y.asInstanceOf[AttributeReference], p.child).foreach(y => {
+                listenerLineageLimitation.append((y, p.condition.toString()))
+              })
+            })
+          }
+        }
         p.children.map(extractColumnsLineage(_, parentColumnsLineage)).reduce(mergeColumnsLineage)
       }
 
@@ -645,14 +683,12 @@ trait LineageParser {
 
   private def extractAttribute(matchedOpt: Option[Attribute], usage:String) = {
     matchedOpt match {
-      case Some(attribute) => {
-        val field = attribute.qualifier.mkString(".") + "." + attribute.name
-        listenerLineageLimitation.append((field, usage))
-      }
+      case Some(attribute) => listenerLineageLimitation.append((attribute.qualifier.mkString(".") + "." + attribute.name, usage))
       case None =>
     }
   }
 
+  //hardcode for shopee
   private def parsePath(path: String): (String, String) = {
     if (path.contains(".db")) {
       val cleanedPath = path.stripPrefix("hdfs://").stripPrefix("/")

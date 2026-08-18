@@ -10,6 +10,7 @@ import com.shopee.warehouse.sqlparser.pojo.ColumnLineageResult;
 import com.shopee.warehouse.sqlparser.pojo.LineageBatchResult;
 import com.shopee.warehouse.sqlparser.pojo.LineageResult;
 import com.shopee.warehouse.sqlparser.pojo.SparkStageMetric;
+import com.shopee.warehouse.sqlparser.pojo.entity.Limitation;
 import com.shopee.warehouse.sqlparser.pojo.entity.TableInfo;
 import com.shopee.warehouse.sqlparser.util.LineageUtil;
 import com.shopee.warehouse.sqlparser.util.ScalaUtil;
@@ -153,6 +154,7 @@ public class BatchParseService {
                 }
                 return null;
             });
+            result.setLimitations(ScalaUtil.getLimitationAsJava(lineage));
             trimSparkCatalog(result);
             return result;
         } catch (Exception e) {

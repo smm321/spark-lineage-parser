@@ -22,10 +22,10 @@ import scala.collection.mutable
 
 class SparkQueryExecutionListener extends QueryExecutionListener{
   val seatalkMsg = new java.util.HashSet[String]
-
+  var appId: String = ""
   override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
     try{
-      val appId = qe.sparkSession.sparkContext.getConf.get("spark.app.id")
+      appId = qe.sparkSession.sparkContext.getConf.get("spark.app.id")
       var lineageOpt:Lineage = null
       try {
         lineageOpt = SparkSQLLineageParseHelper.apply(qe.sparkSession).transformToLineage(0, qe.logical)
@@ -41,9 +41,9 @@ class SparkQueryExecutionListener extends QueryExecutionListener{
       if (lineage.outputTables.exists(o => o.equalsIgnoreCase("__local__"))
         || lineage.inputTables.exists(o => o.equalsIgnoreCase("__local__"))) return
 
-//      if ((lineage.outputTables.isEmpty || lineage.outputTables.headOption.contains("")) && lineage.inputTables.headOption.nonEmpty) {
-//        lineageOpt = SparkSQLLineageParseHelper.apply(qe.sparkSession).transformToTableLineage(0, qe.logical)
-//      }
+      if ((lineage.outputTables.isEmpty || lineage.outputTables.headOption.contains("")) && lineage.inputTables.headOption.nonEmpty) {
+        lineageOpt = SparkSQLLineageParseHelper.apply(qe.sparkSession).transformToTableLineage(0, qe.logical)
+      }
 //      println(lineage.toString)
       val bankLineage:LineageResult = new LineageResult
       bankLineage.setInputTable(ScalaUtil.convertScalaListToJavaList(lineage.inputTables))
@@ -81,6 +81,12 @@ class SparkQueryExecutionListener extends QueryExecutionListener{
 
   def notifyLineageResultToSqlParser(result: LineageResult, host: String, port: String): Unit = {
     try{
+      val gson = new GsonBuilder()
+        .disableHtmlEscaping()
+        .create()
+      val req:String = gson.toJson(result)
+      if (null != appId && appId.startsWith("local")) println(req)
+
       val url = new URL(String.format("http://%s:%s/listenerLineage", host, port))
       val connection: HttpURLConnection = url.openConnection().asInstanceOf[HttpURLConnection]
       connection.setRequestMethod("POST")
@@ -89,11 +95,6 @@ class SparkQueryExecutionListener extends QueryExecutionListener{
       connection.setConnectTimeout(10000)
       connection.setReadTimeout(10000)
       val outputStream = new BufferedWriter(new OutputStreamWriter(connection.getOutputStream, "UTF-8"))
-      val gson = new GsonBuilder()
-        .disableHtmlEscaping()
-        .create()
-      val req:String = gson.toJson(result)
-//      println(req)
       outputStream.write(req)
       outputStream.flush()
       outputStream.close()
@@ -108,54 +109,54 @@ class SparkQueryExecutionListener extends QueryExecutionListener{
     }
   }
 
-  def parseResultNotify(msg:String, host:String): Unit = {
-    try {
-      val (ctalkUrl, squid) = getNotifyInfo(host)
-      val url = new URL(ctalkUrl)
-      val proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(squid, 3128))
-      val connection: HttpURLConnection = url.openConnection(proxy).asInstanceOf[HttpURLConnection]
-      connection.setRequestMethod("POST")
-      connection.setRequestProperty("Content-Type", "application/json")
-      connection.setDoOutput(true)
-      connection.setConnectTimeout(10000)
-      connection.setReadTimeout(10000)
-      val outputStream = new BufferedWriter(new OutputStreamWriter(connection.getOutputStream, "UTF-8"))
-      val ctalkRequest = new java.util.HashMap[String, Object]()
-      val content = new java.util.HashMap[String, String]()
-      content.put("content", msg)
-      ctalkRequest.put("tag", "text")
-      ctalkRequest.put("text", content)
-      val mapper = new ObjectMapper()
-      mapper.registerModule(DefaultScalaModule)
-      val req = mapper.writeValueAsString(ctalkRequest)
-      if (seatalkMsg.contains(req)) return
-      seatalkMsg.add(req)
-      println(s"ctalk Request : $req")
-      outputStream.write(req)
-      outputStream.flush()
-      outputStream.close()
-      val responseCode = connection.getResponseCode
-      println(s"ctalk Response Code: $responseCode")
-      connection.disconnect()
-    } catch {
-      case _: Exception =>
-    }
-  }
+//  def parseResultNotify(msg:String, host:String): Unit = {
+//    try {
+//      val (ctalkUrl, squid) = getNotifyInfo(host)
+//      val url = new URL(ctalkUrl)
+//      val proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(squid, 3128))
+//      val connection: HttpURLConnection = url.openConnection(proxy).asInstanceOf[HttpURLConnection]
+//      connection.setRequestMethod("POST")
+//      connection.setRequestProperty("Content-Type", "application/json")
+//      connection.setDoOutput(true)
+//      connection.setConnectTimeout(10000)
+//      connection.setReadTimeout(10000)
+//      val outputStream = new BufferedWriter(new OutputStreamWriter(connection.getOutputStream, "UTF-8"))
+//      val ctalkRequest = new java.util.HashMap[String, Object]()
+//      val content = new java.util.HashMap[String, String]()
+//      content.put("content", msg)
+//      ctalkRequest.put("tag", "text")
+//      ctalkRequest.put("text", content)
+//      val mapper = new ObjectMapper()
+//      mapper.registerModule(DefaultScalaModule)
+//      val req = mapper.writeValueAsString(ctalkRequest)
+//      if (seatalkMsg.contains(req)) return
+//      seatalkMsg.add(req)
+//      println(s"ctalk Request : $req")
+//      outputStream.write(req)
+//      outputStream.flush()
+//      outputStream.close()
+//      val responseCode = connection.getResponseCode
+//      println(s"ctalk Response Code: $responseCode")
+//      connection.disconnect()
+//    } catch {
+//      case _: Exception =>
+//    }
+//  }
 
-  def getNotifyInfo(host:String): (String, String) = {
-    host match {
-      case "10.213.3.63" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "id-squid-nonlive.mdw.seabanksvc.com")
-      case "10.213.3.64" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "ph-squid-nonlive.mdw.seabanksvc.com")
-      case "10.213.3.68" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "squid-nonlive.mdw.maribanksvc.com")
-      case "10.162.9.100" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid-proxy-id.bke.shopee.io") // id live
-      case "10.162.137.3" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid-proxy-id.bke.shopee.io") // id dr
-      case "10.163.95.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.seabanksvc.com") // ph live
-      case "10.163.190.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.seabanksvc.com") // ph dr
-      case "10.165.95.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.maribanksvc.com") // sg live
-      case "10.165.195.162" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.maribanksvc.com")  // sg dr
-      case _ => throw new Exception("invalid sql-parser url")
-    }
-  }
+//  def getNotifyInfo(host:String): (String, String) = {
+//    host match {
+//      case "10.213.3.63" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "id-squid-nonlive.mdw.seabanksvc.com")
+//      case "10.213.3.64" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "ph-squid-nonlive.mdw.seabanksvc.com")
+//      case "10.213.3.68" => ("https://openapi.seatalk.io/webhook/group/5D8nePbpS8-8bJe8ymClVg", "squid-nonlive.mdw.maribanksvc.com")
+//      case "10.162.9.111" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid-proxy-id.bke.shopee.io") // id live
+//      case "10.162.136.16" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid-proxy-id.bke.shopee.io") // id dr
+//      case "10.163.95.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.seabanksvc.com") // ph live
+//      case "10.163.190.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.seabanksvc.com") // ph dr
+//      case "10.165.95.160" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.maribanksvc.com") // sg live
+//      case "10.165.195.162" => ("https://openapi.seatalk.io/webhook/group/GLcOmOU7QgWGluwicguS9w", "squid.mdw.maribanksvc.com")  // sg dr
+//      case _ => throw new Exception("invalid sql-parser url")
+//    }
+//  }
 }
 
 class SparkMetricReportListener extends SparkListener {
@@ -270,7 +271,8 @@ class SparkMetricReportListener extends SparkListener {
         case p: SparkListenerSQLExecutionEnd => {
           val qe = getField[QueryExecution](p, "qe")
           if (qe == null) return
-          try {this.sql = qe.executedPlan.origin.sqlText.get} catch {case e:Throwable =>}
+          //try {this.sql = qe.executedPlan.origin.sqlText.get} catch {case e:Throwable =>}
+          this.sql = ""
           try {
             val preRule:Seq[Rule[SparkPlan]] = getField(qe.executedPlan, "queryStagePreparationRules")
             preRule.foreach(o => this.preRule.add(o.ruleName))
@@ -382,7 +384,7 @@ class SparkMetricReportListener extends SparkListener {
       }
       connection.disconnect()
     } catch {
-      case e: Throwable => print(e.getMessage)
+      case e: Throwable => e.printStackTrace()
     }
   }
 
@@ -422,7 +424,7 @@ class SparkMetricReportListener extends SparkListener {
       }
       connection.disconnect()
     } catch {
-      case e: Throwable => print(e.getMessage)
+      case e: Throwable => e.printStackTrace()
     }
   }
 

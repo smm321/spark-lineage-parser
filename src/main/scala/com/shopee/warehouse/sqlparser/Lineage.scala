@@ -17,6 +17,9 @@
 
 package com.shopee.warehouse.sqlparser
 
+import com.shopee.warehouse.sqlparser.pojo.entity.Limitation
+import java.util
+
 case class ColumnLineage(column: String, originalColumns: Set[String]) {
   override def toString: String = {
     val originals = originalColumns.mkString(", ")
